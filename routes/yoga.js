@@ -19,15 +19,36 @@ router.post('/generate', async (req, res) => {
           {
             parts: [
               {
-               text: `Suggest 3 yoga poses for the goal: "${goal}".
-Respond only in raw JSON array format, do NOT wrap it in markdown code block. Each object should contain:
+               text: `
+Suggest 3 yoga poses for the goal: "${goal}".
+
+Respond only in raw JSON array format. Do NOT wrap it in a markdown code block. Each object should contain:
 
 - title
-- image (a public image URL of the pose)
 - instructions
 - benefits
+- english_name_search (This should match the "name" field from our dataset)
+- sanskrit_name_search (This should match the "sanskrit_name" field from our dataset)
 
-No extra explanation or formatting.`
+Use the following only as an **example** to understand the naming format and structure. Do NOT limit your suggestions to just these:
+
+[
+  {
+    "name": "Wind Removing Pose",
+    "sanskrit_name": "Pavanamuktasan"
+  },
+  {
+    "name": "Bow Pose",
+    "sanskrit_name": "Dhanurasana"
+  },
+  {
+    "name": "Half Bow Pose",
+    "sanskrit_name": "Ardha Dhanurasana"
+  }
+]
+
+Make sure the english_name_search and sanskrit_name_search values match exactly with the corresponding pose in our dataset (not necessarily the ones in this example). Your output should only contain the required JSON format with no explanation or formatting.
+`
               }
             ]
           }
@@ -36,6 +57,7 @@ No extra explanation or formatting.`
     );
 
 // Add this route before app.listen
+console.log(response.data.candidates?.[0]?.content);
     const result = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
 
     res.json({ poses: result });
@@ -48,6 +70,21 @@ No extra explanation or formatting.`
     });
   }
 });
+
+// dataset
+// ✅ Use this inside routes/yoga.js
+router.get('/dataset', async (req, res) => {
+  try {
+    const response = await axios.get(
+      'https://huggingface.co/datasets/omergoshen/yoga_poses/resolve/main/yoga_poses.json'
+    );
+    res.json(response.data);
+  } catch (err) {
+    console.error('Dataset fetch error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch dataset' });
+  }
+});
+
 
 // Save or update daily yoga status
 router.post('/save-daily', auth, async (req, res) => {
@@ -72,33 +109,47 @@ router.post('/save-daily', auth, async (req, res) => {
   }
 });
 
-// GET /api/yoga/history?year=2025&month=6
 router.get('/history', auth, async (req, res) => {
-  const { year, month } = req.query;
+  console.log('>>> THIS IS THE NEW HISTORY ROUTE <<<', req.query);
+  const { months } = req.query;
   const userId = req.user.id;
-
-  if (!year || !month) {
-    return res.status(400).json({ error: 'Year and month are required' });
-  }
+  const numberOfMonths = parseInt(months) || 1; // default to 1 month if not provided
 
   try {
-    // Construct date range
-    const start = `${year}-${month.padStart?.(2, '0')}-01`;
-    const endDate = new Date(start);
-    endDate.setMonth(endDate.getMonth() + 1);
-    const end = endDate.toISOString().split('T')[0];
-
-    // Fetch all entries for user in the month
-    const entries = await YogaTracker.find({
-      user: userId,
-      date: { $gte: start, $lt: end }
-    });
-
-    // Convert to lookup map { '2025-06-01': true, ... }
+    const today = new Date();
     const history = {};
-    entries.forEach(entry => {
-      history[entry.date] = entry.done;
-    });
+
+    for (let i = 0; i < numberOfMonths; i++) {
+      const date = new Date(today.getFullYear(), today.getMonth() - i, 1);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const start = `${year}-${month}-01`;
+      const endDate = new Date(year, date.getMonth() + 1, 1);
+      const end = endDate.toISOString().split('T')[0];
+
+      // Fetch DB entries for that month
+      const entries = await YogaTracker.find({
+        user: userId,
+        date: { $gte: start, $lt: end }
+      });
+
+      // Create lookup map from DB
+      const monthMap = {};
+      entries.forEach(entry => {
+        monthMap[entry.date] = entry.done;
+      });
+
+      // Fill in false for missing days
+      const daysInMonth = new Date(year, date.getMonth() + 1, 0).getDate();
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dayStr = String(d).padStart(2, '0');
+        const dateStr = `${year}-${month}-${dayStr}`;
+        if (!(dateStr in monthMap)) {
+          monthMap[dateStr] = false;
+        }
+        history[dateStr] = monthMap[dateStr];
+      }
+    }
 
     res.json(history);
   } catch (err) {
@@ -107,9 +158,10 @@ router.get('/history', auth, async (req, res) => {
   }
 });
 
-// Save individual pose-level routine status
- router.post('/routine-status', auth, async (req, res) => {
-  const { date, routine } = req.body;
+
+ // Save individual pose-level routine status
+router.post('/routine-status', auth, async (req, res) => {
+  const { date, routine, goal } = req.body; // ✅ include goal
   const userId = req.user.id;
 
   try {
@@ -120,16 +172,17 @@ router.get('/history', auth, async (req, res) => {
     }
 
     entry.routine = routine;
-    entry.done = routine.every(pose => pose.done); // Mark done if all poses are done
+    entry.goal = goal; // ✅ store goal
+    entry.done = routine.every(pose => pose.done);
     await entry.save();
 
     res.status(200).json({ message: 'Routine saved', done: entry.done });
-
   } catch (err) {
     console.error('Routine save error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
+
 
 
 // GET /api/yoga/streak
@@ -160,6 +213,7 @@ router.get('/streak', auth, async (req, res) => {
   }
 });
 
+
 // GET /api/yoga/routine?date=2025-06-25
 router.get('/routine', auth, async (req, res) => {
   const { date } = req.query;
@@ -174,9 +228,50 @@ router.get('/routine', auth, async (req, res) => {
       return res.json([]); // no routine saved
     }
 
-    res.json(entry.routine);
+    // ✅ return both routine and goal
+    res.json({
+      routine: entry.routine,
+      goal: entry.goal || ''
+    });
   } catch (err) {
     console.error('Error fetching routine:', err.message);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// POST /api/yoga/daily-pose
+router.post('/daily-pose', auth, async (req, res) => {
+  const { date, pose } = req.body;
+  const userId = req.user.id;
+
+  try {
+    let entry = await YogaTracker.findOne({ user: userId, date });
+    if (!entry) {
+      entry = new YogaTracker({ user: userId, date });
+    }
+
+    entry.dailyPose = pose;
+    await entry.save();
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error saving daily pose:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// GET /api/yoga/daily-pose?date=2025-06-25
+router.get('/daily-pose', auth, async (req, res) => {
+  const { date } = req.query;
+  const userId = req.user.id;
+
+  if (!date) return res.status(400).json({ message: 'Date is required' });
+
+  try {
+    const entry = await YogaTracker.findOne({ user: userId, date });
+    res.json(entry?.dailyPose || null);
+  } catch (err) {
+    console.error('Error fetching daily pose:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

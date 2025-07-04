@@ -9,7 +9,15 @@ const axios = require('axios');
 const app = express();
 
 // Middlewares
-app.use(cors());
+// Allow only Vercel frontend domain for CORS
+const allowedOrigins = [
+  'https://yoga-frontend-kohl.vercel.app/', // TODO: Replace with your actual deployed Vercel URL
+  'http://localhost:3000' // for local development
+];
+app.use(cors({
+  origin: allowedOrigins,
+  // credentials: true // Uncomment if you ever use cookies
+}));
 app.use(express.json());
 
 

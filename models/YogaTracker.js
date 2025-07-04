@@ -5,6 +5,7 @@ const YogaTrackerSchema = new mongoose.Schema({
   date: { type: String, required: true }, // format: 'yyyy-mm-dd'
   done: { type: Boolean, default: false },
   streak: { type: Number, default: 0 },
+  goal: { type: String },
   routine: [
     {
       title: String,
@@ -13,7 +14,14 @@ const YogaTrackerSchema = new mongoose.Schema({
       benefits: String,
       done: Boolean
     }
-  ]
+  ],
+  dailyPose: {
+  title: String,
+  image: String,
+  instructions: String,
+  benefits: String
+}
+
 });
 
 
